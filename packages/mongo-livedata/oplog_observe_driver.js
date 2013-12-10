@@ -333,7 +333,8 @@ _.extend(OplogObserveDriver.prototype, {
 
   _cursorForQuery: function () {
     var self = this;
-    // XXX this is WRONG we need to use the shared projection!!
+    // XXX this is WRONG we need to use the shared projection!!  eg take a
+    // modify to something matching and incorrectly think it stops matching
     return new Cursor(self._mongoHandle, self._cursorDescription);
   },
 
