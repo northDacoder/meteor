@@ -23,6 +23,15 @@ if (Meteor.isServer) {
   });
 }
 
+var runInFence = function (f) {
+  if (Meteor.isClient) {
+    f();
+  } else {
+    var fence = new DDPServer._WriteFence;
+    DDPServer._CurrentWriteFence.withValue(fence, f);
+    fence.armAndWait();
+  }
+};
 
 // Helpers for upsert tests
 
@@ -477,16 +486,6 @@ Tinytest.addAsync("mongo-livedata - fuzz test, " + idGeneration, function(test, 
   doStep();
 
 });
-
-var runInFence = function (f) {
-  if (Meteor.isClient) {
-    f();
-  } else {
-    var fence = new DDPServer._WriteFence;
-    DDPServer._CurrentWriteFence.withValue(fence, f);
-    fence.armAndWait();
-  }
-};
 
 Tinytest.addAsync("mongo-livedata - scribbling, " + idGeneration, function (test, onComplete) {
   var run = test.runId();
@@ -1896,4 +1895,57 @@ Meteor.isServer && Tinytest.add("mongo-livedata - oplog - _disableOplog", functi
   test.isTrue(observeWithoutOplog._observeDriver);
   test.isFalse(observeWithoutOplog._observeDriver._usesOplog);
   observeWithoutOplog.stop();
+});
+
+Meteor.isServer && Tinytest.add("mongo-livedata - oplog - include selector fields", function (test) {
+  var collName = "includeSelector" + Random.id();
+  var coll = new Meteor.Collection(collName);
+
+  // Start an observeChanges on our collection. The purpose of this is so that
+  // when we do an insert inside a fence, there's actually some oplog-observe
+  // that needs to be updated, which guarantees that the fence won't close until
+  // its added has been called, which is to say that we've processed the whole
+  // oplog. We need this to ensure that we don't see the insert on the oplog
+  // during the second observe; otherwise it does not consistently reproduce the
+  // bug that this test is testing.
+  var added = false;
+  var initialHandle = coll.find({}).observeChanges({
+    added: function () {
+      added = true;
+    }
+  });
+
+  var docId;
+  runInFence(function () {
+    docId = coll.insert({a: 1, b: [3, 2], c: 'foo'});
+  });
+  test.isTrue(added);
+  test.isTrue(docId);
+  initialHandle.stop();
+
+  var output = [];
+  var handle = coll.find({a: 1, b: 2}, {fields: {c: 1}}).observeChanges({
+    added: function (id, fields) {
+      output.push(['added', id, fields]);
+    },
+    changed: function (id, fields) {
+      output.push(['changed', id, fields]);
+    },
+    removed: function (id) {
+      output.push(['removed', id]);
+    }
+  });
+  // Initially should match the document.
+  test.length(output, 1);
+  test.equal(output.shift(), ['added', docId, {c: 'foo'}]);
+
+  // Update in such a way that, if we only knew about the published field 'c'
+  // and the changed field 'b', we would think it didn't match any more.
+  runInFence(function () {
+    coll.update(docId, {$set: {'b.0': 2, c: 'bar'}});
+  });
+  test.length(output, 1);
+  test.equal(output.shift(), ['changed', docId, {c: 'bar'}]);
+
+  handle.stop();
 });

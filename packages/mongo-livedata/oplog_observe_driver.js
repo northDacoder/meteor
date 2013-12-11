@@ -39,10 +39,10 @@ OplogObserveDriver = function (options) {
   self._projectionFn = LocalCollection._compileProjection(projection);
   // Projection function, result of combining important fields for selector and
   // existing fields projection
-  var sharedProjection = LocalCollection._combineSelectorAndProjection(
+  self._sharedProjection = LocalCollection._combineSelectorAndProjection(
     selector, projection);
   self._sharedProjectionFn = LocalCollection._compileProjection(
-    sharedProjection);
+    self._sharedProjection);
 
   self._needToFetch = new LocalCollection._IdMap;
   self._currentlyFetching = null;
@@ -335,7 +335,13 @@ _.extend(OplogObserveDriver.prototype, {
     var self = this;
     // XXX this is WRONG we need to use the shared projection!!  eg take a
     // modify to something matching and incorrectly think it stops matching
-    return new Cursor(self._mongoHandle, self._cursorDescription);
+    var options = _.clone(self._cursorDescription.options);
+    options.fields = self._sharedProjection;
+    var description = new CursorDescription(
+      self._cursorDescription.collectionName,
+      self._cursorDescription.selector,
+      options);
+    return new Cursor(self._mongoHandle, description);
   },
 
 
